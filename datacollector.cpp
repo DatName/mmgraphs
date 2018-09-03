@@ -1,60 +1,67 @@
 #include "datacollector.h"
-#include <QCoreApplication>
-#include <time.h>
-#include <ctime>
-#include <stdio.h>
-#include "cppproto/messages_generic.pb.h"
 #include "cppproto/messages_marketdata.pb.h"
+#include "cppproto/messages_indicators.pb.h"
 #include "cppproto/marketdata.pb.h"
-#include "qcustomplot.h"
+#include "QMap";
 
-using namespace std;
-using namespace models;
-using namespace QCP;
+void DataCollector::setConnection(std::pair<const char *, std::pair<int, size_t> > *msg, std::mutex *m, std::condition_variable *cond)
+{
+    this->message = msg;
+    this->mutex = m;
+    this->condition = cond;
+}
 
-void DataCollector::run() {
-    std::pair<const char*, size_t> message;
-    models::OrderBookSnapshot orderbook;
+void DataCollector::run()
+{
+    models::Message msgheader;
 
-    while (this->chan->get(message)) {
+    while (true) {
+        std::unique_lock<std::mutex> locker(*this->mutex);
+        this->condition->wait(locker);
 
-        bool flag = orderbook.ParseFromArray(message.first, static_cast<int>(message.second));
+        auto data = this->message->first;
+        auto deliveryTag = this->message->second.first;
+        auto size = this->message->second.second;
+
+        bool flag = msgheader.ParseFromArray(data, int(size));
 
         if (!flag) {
-//            qDebug() << "error parsing order book from string" << orderbook.body().DebugString().c_str();
+            qDebug() << "Failed to parse" << size << " bytes from tag " << deliveryTag;
             continue;
         }
 
-        auto snapshot = orderbook.body().snapshot();
-        std::string symbol = snapshot.symbol().c_str();
-        std::string exchange = snapshot.exchange().c_str();
+        switch (msgheader.header().type()) {
+        case models::BOOK_SNAPSHOT:
+            models::OrderBookSnapshot snapshot;
+            flag = snapshot.ParseFromArray(data, int(size));
 
-        if (symbol.compare("ETH/BTC") != 0) {
-            continue;
+            if (flag) {
+                this->onBookSnapshot(snapshot);
+            } else {
+                qDebug() << "Failed to parse order book snapshot";
+            }
+            break;
         }
-
-        qDebug() << exchange.c_str();
-
-        if (exchange.compare("OKEX") != 0) {
-            continue;
-        }
-
-        const time_t t = orderbook.header().timestamp()/1000;
-
-        auto bids = &snapshot.bids();
-        auto asks = &snapshot.asks();
-
-        if ((snapshot.asks_size() == 0) || (snapshot.bids_size() == 0)) {
-            continue;
-        }
-
-        auto b = bids->at(0).price();
-        auto a = asks->at(0).price();
-        QCPGraphData *newx = new QCPGraphData(t, (b+a)/2.0);
-
-//        qDebug() << "emitting signal";
-        this->data.append(*newx);
-
-        emit newData();
     }
+}
+
+void DataCollector::onBookSnapshot(models::OrderBookSnapshot snapshot) {
+    std::lock_guard<std::mutex> lock(this->ownMutex);
+
+    QString symbol = QString(snapshot.body().snapshot().symbol().c_str());
+    QString exchange = QString(snapshot.body().snapshot().exchange().c_str());
+
+    auto indicators = snapshot.body().indicators();
+    auto data = QMap<QString, double>();
+
+    QString instrument = symbol.append("|").append(exchange);
+
+    for (auto it=indicators.begin();it != indicators.end(); it++) {
+        QString k = QString(it->first.c_str());
+        double v = it->second;
+        auto key = QString(instrument).append("-").append(k);
+        data[key] = v;
+    }
+
+    emit onNewData(data);
 }

@@ -1,24 +1,31 @@
 #ifndef DATACOLLECTOR_H
 #define DATACOLLECTOR_H
-#include <QThread>
-#include "datareceiver.h"
+
+#include <QObject>
 #include <qcustomplot.h>
+#include <cppproto/messages_marketdata.pb.h>
 
 class DataCollector : public QThread
 {
     Q_OBJECT
 public:
-    DataCollector(GoChannel<std::pair<const char*, size_t>> *msg_channel) {
-        chan = msg_channel;
-    }
+    explicit DataCollector(QObject *parent = nullptr) {}
+    void setConnection(std::pair<const char*, std::pair<int, size_t>> *msg, std::mutex *m, std::condition_variable *cond);
+    void run();
 
-    GoChannel<std::pair<const char*, size_t>> *chan;
-    QVector<QCPGraphData> data;
-    void run(void);
+public:
+    std::pair<const char*, std::pair<int, size_t>> *message;
+    std::mutex *mutex;
+    std::condition_variable *condition;
+    std::mutex ownMutex;
+
+public:
+    void onBookSnapshot(models::OrderBookSnapshot snapshot);
 
 signals:
-    void newData();
+    void onNewData(QMap<QString, double> data);
 
+public slots:
 };
 
 #endif // DATACOLLECTOR_H

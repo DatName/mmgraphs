@@ -1,16 +1,22 @@
 #include "datareceiver.h"
+#include "ev++.h"
 #include "cppproto/messages_generic.pb.h"
 #include "cppproto/messages_marketdata.pb.h"
 #include "cppproto/marketdata.pb.h"
+#include "thread"
 
 using namespace models;
 using namespace AMQP;
+using namespace std;
 
-void DataReceiver::run()
+void RabbitMQReceiver::run(std::string address)
 {
-    AMQP::LibEvHandler handler(this->loop);
+    ev::default_loop loop;
+    AMQP::LibEvHandler handler(loop);
 
-    AMQP::TcpConnection connection(&handler, this->m_host);
+    AMQP::Address host(address);
+
+    AMQP::TcpConnection connection(&handler, host);
     this->connection = &connection;
 
     AMQP::TcpChannel channel(&connection);
@@ -18,37 +24,35 @@ void DataReceiver::run()
 
     this->declareExchange("md_topic", AMQP::topic);
     this->addQueue("md_topic", "", "SS.#", AMQP::exclusive + !AMQP::durable);
+    this->addQueue("indicators_topic", "", "", AMQP::exclusive + !AMQP::durable);
 
-    ev_run(this->loop);
+    ev_run(loop);
 }
 
-void DataReceiver::declareExchange(std::string name, AMQP::ExchangeType type = AMQP::topic)
+
+void RabbitMQReceiver::declareExchange(std::string name, AMQP::ExchangeType type = AMQP::topic)
 {
     this->channel->declareExchange(name, type).onSuccess([&name]() {
-        qDebug() << "Exchange" << &name << "declared";
+        std::cout << "Exchange " << &name << " declared" << endl;
     }).onError([&name](const char *message) {
-        qDebug() << "Exchange error" << &name << ":" << message;
+        std::cout << "Exchange error " << &name << ":" << message << endl;
     });
 
     this->channel->onError([&name](const char *msg) {
-        qDebug() << "Error opening channel" << &name << ":" << msg;
+        std::cout << "Error opening channel" << &name << ":" << msg << endl;
     });
 
     this->channel->onReady([&name]() {
-        qDebug() << "Channel" << &name << "ready";
+        std::cout << "Channel" << &name << "ready" << endl;
     });
 }
 
 //int parameters = AMQP::exclusive + !AMQP::durable
-void DataReceiver::addQueue(std::string exchange, std::string queue, std::string routing_key, int parameters)
+void RabbitMQReceiver::addQueue(std::string exchange, std::string queue, std::string routing_key, int parameters)
 {
-    if (this->channel == nullptr) {
-        qDebug() << "NULL PTR!";
-    }
-
     this->channel->declareQueue(parameters)
             .onSuccess([](const std::string &queue, uint32_t messagecount, uint32_t consumercount) {
-        qDebug() << "queue declared: " << &queue << ". Messages count:" << messagecount << ". Consumer count:" << consumercount;
+        std::cout << "queue declared: " << &queue << ". Messages count:" << messagecount << ". Consumer count:" << consumercount << endl;
     });
 
     this->channel->bindQueue(exchange, queue, routing_key);
@@ -56,10 +60,32 @@ void DataReceiver::addQueue(std::string exchange, std::string queue, std::string
     this->channel->consume(queue)
             .onReceived([this](const AMQP::Message &message, uint64_t deliveryTag, bool redelivered){
 
-        if (!redelivered) {
-            this->m_chan.put(std::make_pair(message.body(), message.bodySize()));
+        if (redelivered) {
+            return;
         }
 
+        this->mutex->lock();
+
+        size_t sz = message.bodySize();
+        char* data = (char*)malloc(sizeof(char)*sz);
+        for (size_t j = 0; j < sz; j++)
+            data[j] = message.body()[j];
+
+        models::Message headermsg;
+
+        bool flag = headermsg.ParsePartialFromArray(message.body(), int(message.bodySize()));
+
+        if (!flag) {
+            std::cout << "faild to parse in consumer" << endl;
+            return;
+        }
+
+        this->message->first = data;
+        this->message->second = std::make_pair(deliveryTag, sz);
         this->channel->ack(deliveryTag);
+        this->condition->notify_one();
+
+        this->mutex->unlock();
+
     });
 }

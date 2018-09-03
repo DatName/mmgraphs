@@ -26,7 +26,6 @@ SOURCES += \
         main.cpp \
         mainwindow.cpp \
     qcustomplot.cpp \
-    rabbitmq.cpp \
     cppproto/marketdata.pb.cc \
     cppproto/messages_broker.pb.cc \
     cppproto/messages_config.pb.cc \
@@ -42,7 +41,6 @@ SOURCES += \
 HEADERS += \
         mainwindow.h \
     qcustomplot.h \
-    rabbitmq.h \
     cppproto/marketdata.pb.h \
     cppproto/messages_broker.pb.h \
     cppproto/messages_config.pb.h \

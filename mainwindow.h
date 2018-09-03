@@ -12,8 +12,6 @@
 #include <QObject>
 #include <qcustomplot.h>
 #include <datareceiver.h>
-#include <datacollector.h>
-#include <dataaggregator.h>
 
 QT_CHARTS_USE_NAMESPACE
 
@@ -30,19 +28,17 @@ public:
     ~MainWindow();
 
 private:
-    DataReceiver *receiver;
-    DataCollector *collector;
-    DataAggregator *aggregator;
-
     Ui::MainWindow* ui;
-    QList<QCPGraph*> graphs;
-    QVector<QCPGraphData*> data;
+    QMap<QString, QCPGraph*> graphs;
 
 public slots:
     void onMouseWheel(QWheelEvent *event);
-    void on_add_clicked();
     void xAxisChanged(QCPRange range);
-    void updatePlot();
+    void onNewData(QMap<QString, double> data);
+
+private slots:
+    void on_indicatorsList_itemClicked(QListWidgetItem *item);
+    void on_rescale_clicked();
 };
 
 #endif // MAINWINDOW_H

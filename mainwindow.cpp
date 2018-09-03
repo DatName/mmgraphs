@@ -5,9 +5,6 @@
 #include "ui_mainwindow.h"
 #include <QWheelEvent>
 #include "datareceiver.h"
-#include <datacollector.h>
-
-using namespace models;
 
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent),
@@ -19,27 +16,6 @@ MainWindow::MainWindow(QWidget *parent) :
     ui->plot->setInteraction(QCP::iRangeDrag);
     ui->plot->setInteraction(QCP::iRangeZoom);
     ui->plot->setInteraction(QCP::iSelectPlottables, true);
-
-    auto graph = ui->plot->addGraph();
-//    graph->setLineStyle(QCPGraph::lsNone);
-    graph->setScatterStyle(QCPScatterStyle(QCPScatterStyle::ssCircle));
-
-    connect(graph->keyAxis(), SIGNAL(rangeChanged(QCPRange)), SLOT(xAxisChanged(QCPRange)));
-
-    QSharedPointer<QCPAxisTickerDateTime> dateTicker(new QCPAxisTickerDateTime);
-    dateTicker->setDateTimeFormat("d. MMMM\nyyyy");
-    graph->keyAxis()->setTicker(dateTicker);
-
-    auto *receiver = new DataReceiver();
-    this->collector = new DataCollector(&receiver->m_chan);
-    this->collector->start();
-
-    QObject::connect(this->collector, SIGNAL(newData()),
-            this, SLOT(updatePlot()));
-
-    QThreadPool *threadPool = QThreadPool::globalInstance();
-    threadPool->start(receiver);
-
 }
 
 MainWindow::~MainWindow()
@@ -47,18 +23,36 @@ MainWindow::~MainWindow()
     delete ui;
 }
 
-void MainWindow::updatePlot() {
+void MainWindow::onNewData(QMap<QString, double> new_data) {
 
-//    qDebug() << "updating graph" << this->collector->data.length();
+    QDateTime t0 = QDateTime::currentDateTime();
 
-    auto *graph = this->ui->plot->graph(0);
+    for (auto it = new_data.begin(); it != new_data.end(); it++ ) {
+        auto iter = this->graphs.find(it.key());
 
-    graph->keyAxis()->setRange(this->collector->data.first().key,
-                               this->collector->data.last().key);
+        if (iter == this->graphs.end())
+            continue;
 
-    this->ui->plot->graph(0)->data()->add(this->collector->data.last());
+        auto graph = iter.value();
 
-    graph->valueAxis()->rescale();
+        auto newdata = QCPGraphData(t0.toTime_t(), it.value());
+
+        graph->data()->add(newdata);
+
+        if (graph->data()->size() < 5) {
+            graph->keyAxis()->rescale();
+            graph->valueAxis()->rescale();
+        }
+    }
+
+    for (auto it = new_data.begin(); it != new_data.end(); it++) {
+        QString qstr = it.key();
+        auto found = this->ui->indicatorsList->findItems(qstr, Qt::MatchFlag::MatchExactly);
+        if (found.isEmpty()) {
+            this->ui->indicatorsList->addItem(qstr);
+        }
+    }
+
     this->ui->plot->replot();
     this->ui->plot->update();
 }
@@ -68,8 +62,26 @@ void MainWindow::onMouseWheel(QWheelEvent *event)
     qDebug() << __FUNCTION__ << event << ":" << event->pos() << ":" << event->pos().x() << ":" << event->pos().y() << "delta:" << event->delta();
 }
 
-void MainWindow::on_add_clicked()
+void MainWindow::xAxisChanged(QCPRange range)
 {
+    for (auto it=this->graphs.begin(); it!=this->graphs.end(); it++){
+        (*it)->keyAxis()->setRange(range);
+    }
+    ui->plot->replot();
+}
+
+
+void MainWindow::on_indicatorsList_itemClicked(QListWidgetItem *item)
+{
+    auto indicator_name = item->text();
+
+    qDebug() << "context changed" << indicator_name;
+    for (auto it=this->graphs.begin(); it != this->graphs.end(); it++){
+        if (it.key().compare(indicator_name) == 0) {
+            return;
+        }
+    }
+
     int graphcount = ui->plot->graphCount();
     QCPGraph *graph;
 
@@ -88,52 +100,20 @@ void MainWindow::on_add_clicked()
 
     connect(graph->keyAxis(), SIGNAL(rangeChanged(QCPRange)), SLOT(xAxisChanged(QCPRange)));
 
-    double cumsum = 0.0;
-    double fmax = 0.0;
-    double fmin = 0.0;
-    double r = 0.0;
-
-    QDateTime t0 = QDateTime::currentDateTime();
-
-    QVector<QCPGraphData> x;
-
-    for (int j = 0; j < 1000; j++) {
-        r = (static_cast <double> (rand()) / static_cast <double> (RAND_MAX) - 0.5)/2.0;
-        cumsum += r;
-
-        if (cumsum > fmax) {
-            fmax = cumsum;
-        }
-
-        if (cumsum < fmin) {
-            fmin = cumsum;
-        }
-
-        t0 = t0.addDays(1);
-        QCPGraphData *newx = new QCPGraphData(t0.toTime_t(), cumsum);
-        x.append(*newx);
-    }
-
-    graph->keyAxis()->setRange(x.first().key, x.last().key);
-    graph->valueAxis()->setRange(fmin, fmax);
-
-    graph->data()->set(x);
+    graph->setLineStyle(QCPGraph::lsStepRight);
+    graph->setScatterStyle(QCPScatterStyle(QCPScatterStyle::ssCircle));
 
     QSharedPointer<QCPAxisTickerDateTime> dateTicker(new QCPAxisTickerDateTime);
-    dateTicker->setDateTimeFormat("d. MMMM\nyyyy");
+    dateTicker->setDateTimeFormat("hh:mm:ss");
     graph->keyAxis()->setTicker(dateTicker);
+    dateTicker->setTickStepStrategy(QCPAxisTicker::tssReadability);
 
-    this->graphs.append(graph);
-
-    ui->plot->replot();
-    ui->plot->update();
+    this->graphs[indicator_name] = graph;
 }
 
-void MainWindow::xAxisChanged(QCPRange range)
+void MainWindow::on_rescale_clicked()
 {
-    QList<QCPGraph*>::iterator it;
-    for (it=this->graphs.begin(); it!=this->graphs.end(); it++){
-        (*it)->keyAxis()->setRange(range);
+    for (auto it=this->graphs.begin(); it!=this->graphs.end(); it++){
+        (*it)->valueAxis()->rescale();
     }
-    ui->plot->replot();
 }
